@@ -1,7 +1,7 @@
 name: Market Report Bot
 
 on:
-  workflow_dispatch:   # 수동 실행 버튼 활성화
+  workflow_dispatch:
   schedule:
     - cron: '40 22 * * *'   # 오전 7:40 KST
     - cron: '0 9 * * *'     # 오후 6:00 KST
@@ -13,13 +13,13 @@ jobs:
       - name: Send Morning Report
         if: github.event.schedule == '40 22 * * *'
         run: |
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
+          curl -v -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
           -d text="🌅 아침 리포트: 미국 증시 요약 + SOX + 한국 시장 예상"
 
       - name: Send Evening Report
         if: github.event.schedule == '0 9 * * *'
         run: |
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
+          curl -v -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
           -d text="🌇 저녁 리포트: 한국 시장 마감 요약"
