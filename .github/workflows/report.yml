@@ -19,15 +19,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install yfinance requests beautifulsoup4
+          pip install yfinance requests beautifulsoup4 jinja2 playwright
 
-      - name: Fetch Market Data
-        run: |
-          python scripts/market_report.py > report.txt
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
 
-      - name: Send Report to Telegram
-        run: |
-          REPORT=$(cat report.txt)
-          curl -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
-          -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-          --data-urlencode text="$REPORT"
+      - name: Generate and send report
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/market_report.py
