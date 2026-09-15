@@ -1,11 +1,10 @@
 """
-한국증시 오후장 리포트 -> 텔레그램 전송
+한국증시 오후장 리포트 -> 카드 이미지로 만들어서 텔레그램 전송
 
-카드 구성 (텍스트 메시지)
-1. 코스피/코스닥 지수 (전일 대비 등락률)
-2. 외국인·기관 순매수 (코스피/코스닥, 당일 기준)
-3. 상승/하락 상위 종목 (코스피+코스닥 합산)
-4. 관련 뉴스 헤드라인 (구글 뉴스 RSS, "코스피" 키워드)
+카드 구성
+1. 코스피/코스닥 (지수+등락률, 그 아래 개인/외국인/기관 순매수를 한 줄로)
+2. 상승/하락 상위 종목
+3. 관련 뉴스 헤드라인
 
 데이터 출처
 - 지수: yfinance (^KS11, ^KQ11)
@@ -13,30 +12,58 @@
   ※ 정식 공개 문서가 없는 API라 필드 이름이 예상과 다를 수 있습니다. 그런 경우
      "[경고] ... 원본 키" 로그에 실제 필드 이름이 찍히니, 그걸 보고 다시 맞추면 됩니다.
 - 상승/하락 상위 종목: 네이버 증권 시세 순위 페이지 (finance.naver.com/sise/sise_rise.naver 등)
-- 뉴스: 구글 뉴스 RSS 검색 (전세계 어디서 접속해도 막히지 않아 안정적입니다)
+- 뉴스: 구글 뉴스 RSS 검색
 
 실행에 필요한 값 (환경변수):
 - TELEGRAM_TOKEN   : BotFather에게 받은 토큰
 - TELEGRAM_CHAT_ID : 내 채팅방 chat id
+
+필요 패키지: requirements 참고 (playwright install --with-deps chromium 최초 1회 필요, 카드 이미지 렌더링에만 사용)
 """
 
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
+from jinja2 import Environment, FileSystemLoader
+from playwright.sync_api import sync_playwright
 
 KST = ZoneInfo("Asia/Seoul")
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+TEMPLATE_DIR = BASE_DIR / "templates"
+OUTPUT_IMAGE_PATH = BASE_DIR / "report.png"
+
 INDEX_TICKERS = {
-    "^KS11": "코스피",
-    "^KQ11": "코스닥",
+    "KOSPI": ("^KS11", "코스피"),
+    "KOSDAQ": ("^KQ11", "코스닥"),
 }
 
-TREND_MARKETS = ["KOSPI", "KOSDAQ"]
+WATCH_STOCKS = {
+    "005930.KS": "삼성전자",
+    "000660.KS": "SK하이닉스",
+    "005380.KS": "현대차",
+    "066570.KS": "LG전자",
+    "009150.KS": "삼성전기",
+    "012330.KS": "현대모비스",
+    "108490.KQ": "로보티즈",
+    "058610.KQ": "에스피지",
+    "010170.KQ": "대한광통신",
+    "083450.KQ": "GST",
+    "161580.KQ": "필옵틱스",
+    "006400.KS": "삼성SDI",
+    "034020.KS": "두산에너빌리티",
+    "010120.KS": "LS일렉트릭",
+    "000500.KS": "가온전선",
+    "062040.KS": "산일전기",
+    "356680.KQ": "엑스게이트",
+    "272210.KS": "한화시스템",
+}
 
 NEWS_RSS_URL = "https://news.google.com/rss/search"
 NEWS_QUERY = "코스피"
@@ -53,29 +80,22 @@ UA_HEADERS = {
 
 
 # ------------------------------------------------------------------
-# 1) 코스피/코스닥 지수
+# 1) 코스피/코스닥 지수 + 개인/외국인/기관 순매수
 # ------------------------------------------------------------------
-def get_index_data():
-    lines = ["📈 코스피/코스닥"]
-    for ticker, name in INDEX_TICKERS.items():
-        try:
-            hist = yf.Ticker(ticker).history(period="5d")["Close"].dropna()
-            if len(hist) < 2:
-                lines.append(f"  · {name}: 데이터 없음")
-                continue
-            prev, last = hist.iloc[-2], hist.iloc[-1]
-            pct = (last - prev) / prev * 100
-            arrow = "🔺" if pct > 0 else ("🔻" if pct < 0 else "➖")
-            lines.append(f"  {arrow} {name}: {last:,.2f} ({pct:+.2f}%)")
-        except Exception as e:
-            print(f"[경고] {name} 지수 가져오기 실패: {e}", file=sys.stderr)
-            lines.append(f"  · {name}: 데이터 없음")
-    return "\n".join(lines)
+def _get_index_price(ticker: str):
+    """(현재가, 등락률) 튜플을 돌려줍니다. 실패하면 (None, None)."""
+    try:
+        hist = yf.Ticker(ticker).history(period="5d")["Close"].dropna()
+        if len(hist) < 2:
+            return None, None
+        prev, last = hist.iloc[-2], hist.iloc[-1]
+        pct = (last - prev) / prev * 100
+        return last, pct
+    except Exception as e:
+        print(f"[경고] {ticker} 지수 가져오기 실패: {e}", file=sys.stderr)
+        return None, None
 
 
-# ------------------------------------------------------------------
-# 2) 외국인·기관 순매수
-# ------------------------------------------------------------------
 def _find_value(d: dict, keywords):
     """딕셔너리에서 키워드가 포함된 키의 값을 찾습니다. (정확한 필드 이름을 몰라도 대응하기 위함)"""
     for k, v in d.items():
@@ -86,7 +106,7 @@ def _find_value(d: dict, keywords):
 
 
 def get_investor_trend(market: str):
-    """당일 기준 외국인/기관/개인 순매수를 가져옵니다."""
+    """당일 기준 개인/외국인/기관 순매수를 가져옵니다."""
     url = f"https://m.stock.naver.com/api/index/{market}/trend"
     try:
         resp = requests.get(url, headers=UA_HEADERS, timeout=15)
@@ -107,33 +127,106 @@ def get_investor_trend(market: str):
                 file=sys.stderr,
             )
             return None
-        return {"foreign": foreign, "organ": organ, "individual": individual}
+        return {"individual": individual, "foreign": foreign, "organ": organ}
     except Exception as e:
         print(f"[경고] {market} 투자자 매매동향 가져오기 실패: {e}", file=sys.stderr)
         return None
 
 
-def format_trend_section():
-    lines = ["🌊 외국인·기관 순매수 (당일)"]
-    for market in TREND_MARKETS:
-        name = "코스피" if market == "KOSPI" else "코스닥"
+def _numeric_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flow_item(label: str, value):
+    num = _numeric_or_none(value)
+    if num is None:
+        return {"label": label, "value_fmt": "-" if value is None else str(value), "up": False, "down": False}
+    up = num > 0
+    down = num < 0
+    fmt = f"{num:+,.0f}" if num == int(num) else f"{num:+,.2f}"
+    return {"label": label, "value_fmt": fmt, "up": up, "down": down}
+
+
+def build_market_boxes():
+    """코스피/코스닥 박스 데이터를 만듭니다. 각 박스는 지수+등락률, 그리고 개인/외국인/기관 한 줄로 구성됩니다."""
+    boxes = []
+    for market, (ticker, name) in INDEX_TICKERS.items():
+        price, pct = _get_index_price(ticker)
+        valid = price is not None and pct is not None
+        up = valid and pct > 0
+        down = valid and pct < 0
+
         trend = get_investor_trend(market)
-        if not trend:
-            lines.append(f"  · {name}: 데이터 없음")
-            continue
-        parts = []
-        if trend["foreign"] is not None:
-            parts.append(f"외국인 {trend['foreign']:+,}")
-        if trend["organ"] is not None:
-            parts.append(f"기관 {trend['organ']:+,}")
-        if trend["individual"] is not None:
-            parts.append(f"개인 {trend['individual']:+,}")
-        lines.append(f"  · {name}: " + " / ".join(parts) if parts else f"  · {name}: 데이터 없음")
-    return "\n".join(lines)
+        if trend:
+            flow = [
+                _flow_item("개인", trend["individual"]),
+                _flow_item("외국인", trend["foreign"]),
+                _flow_item("기관", trend["organ"]),
+            ]
+        else:
+            flow = []
+
+        boxes.append(
+            {
+                "name": name,
+                "valid": valid,
+                "price_fmt": f"{price:,.2f}" if valid else "-",
+                "pct_fmt": f"{pct:+.2f}%" if valid else "",
+                "up": up,
+                "down": down,
+                "flow": flow,
+            }
+        )
+    return boxes
+
+
+def get_watchlist():
+    """관심종목의 등락률을 한 번에 가져옵니다."""
+    tickers = list(WATCH_STOCKS)
+    try:
+        data = yf.download(
+            tickers=tickers,
+            period="5d",
+            group_by="ticker",
+            threads=True,
+            progress=False,
+            auto_adjust=True,
+        )
+    except Exception as e:
+        print(f"[경고] 관심종목 데이터 다운로드 실패: {e}", file=sys.stderr)
+        data = None
+
+    items = []
+    for ticker, name in WATCH_STOCKS.items():
+        pct = None
+        try:
+            if data is not None:
+                close = data[ticker]["Close"].dropna()
+                if len(close) >= 2:
+                    prev, last = close.iloc[-2], close.iloc[-1]
+                    if prev:
+                        pct = (last - prev) / prev * 100
+        except Exception as e:
+            print(f"[경고] {name}({ticker}) 처리 실패: {e}", file=sys.stderr)
+
+        valid = pct is not None
+        items.append(
+            {
+                "name": name,
+                "valid": valid,
+                "pct_fmt": f"{pct:+.2f}%" if valid else "-",
+                "up": valid and pct > 0,
+                "down": valid and pct < 0,
+            }
+        )
+    return items
 
 
 # ------------------------------------------------------------------
-# 3) 상승/하락 상위 종목
+# 2) 상승/하락 상위 종목
 # ------------------------------------------------------------------
 def get_top_movers(direction: str, count: int = MOVERS_COUNT):
     """네이버 증권 순위 페이지에서 상승률/하락률 상위 종목을 가져옵니다. (코스피+코스닥 합산)"""
@@ -161,31 +254,14 @@ def get_top_movers(direction: str, count: int = MOVERS_COUNT):
                         rate_text = text
                         break
                 if name and rate_text:
-                    results.append(f"{name} ({rate_text})")
+                    results.append({"name": name, "rate": rate_text})
         except Exception as e:
             print(f"[경고] {url} 가져오기 실패: {e}", file=sys.stderr)
     return results[:count]
 
 
-def format_movers_section():
-    risers = get_top_movers("rise")
-    fallers = get_top_movers("fall")
-    lines = ["🏆 상승/하락 상위 종목"]
-    lines.append("  [상승]")
-    if risers:
-        lines.extend(f"   🔺 {r}" for r in risers)
-    else:
-        lines.append("   · 데이터 없음")
-    lines.append("  [하락]")
-    if fallers:
-        lines.extend(f"   🔻 {f}" for f in fallers)
-    else:
-        lines.append("   · 데이터 없음")
-    return "\n".join(lines)
-
-
 # ------------------------------------------------------------------
-# 4) 관련 뉴스
+# 3) 관련 뉴스
 # ------------------------------------------------------------------
 def get_news(query: str = NEWS_QUERY, max_items: int = NEWS_MAX_ITEMS):
     """구글 뉴스 RSS에서 키워드 검색 결과 헤드라인을 가져옵니다."""
@@ -209,32 +285,62 @@ def get_news(query: str = NEWS_QUERY, max_items: int = NEWS_MAX_ITEMS):
         return []
 
 
-def format_news_section():
-    headlines = get_news()
-    lines = ["📰 관련 뉴스"]
-    if headlines:
-        lines.extend(f"  - {h}" for h in headlines)
-    else:
-        lines.append("  · 뉴스를 불러오지 못했습니다")
-    return "\n".join(lines)
-
-
 # ------------------------------------------------------------------
-# 리포트 조립
+# 데이터 조립 + 이미지 렌더링 + 전송
 # ------------------------------------------------------------------
-def build_report() -> str:
+def build_data() -> dict:
     now = datetime.now(KST)
-    header = f"📊 한국증시 오후장 리포트 ({now.strftime('%Y-%m-%d (%a) %H:%M')})"
+    return {
+        "today": now.strftime("%Y년 %m월 %d일 (%a) %H:%M"),
+        "markets": build_market_boxes(),
+        "watch": get_watchlist(),
+        "risers": get_top_movers("rise"),
+        "fallers": get_top_movers("fall"),
+        "news": get_news(),
+    }
 
-    sections = [
-        header,
-        get_index_data(),
-        format_trend_section(),
-        format_movers_section(),
-        format_news_section(),
-    ]
-    return "\n\n".join(sections)
+
+def render_image(data: dict) -> Path:
+    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
+    template = env.get_template("card_template.html")
+    html = template.render(**data)
+
+    html_path = BASE_DIR / "_rendered.html"
+    html_path.write_text(html, encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 820, "height": 100})
+        page.goto(f"file://{html_path}")
+        height = page.evaluate("document.body.scrollHeight")
+        page.set_viewport_size({"width": 820, "height": height})
+        page.screenshot(path=str(OUTPUT_IMAGE_PATH), full_page=True)
+        page.close()
+        browser.close()
+
+    html_path.unlink(missing_ok=True)
+    return OUTPUT_IMAGE_PATH
+
+
+def send_telegram_photo(image_path: Path, caption: str = ""):
+    import os
+
+    token = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        raise RuntimeError("TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 환경변수가 설정되지 않았습니다.")
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    with open(image_path, "rb") as f:
+        resp = requests.post(url, data={"chat_id": chat_id, "caption": caption}, files={"photo": f})
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("ok"):
+        raise RuntimeError(f"텔레그램 전송 실패: {result}")
+    print("텔레그램 이미지 전송 완료!")
 
 
 if __name__ == "__main__":
-    print(build_report())
+    data = build_data()
+    image_path = render_image(data)
+    send_telegram_photo(image_path, caption=f"📊 한국증시 오후장 리포트 ({data['today']})")
