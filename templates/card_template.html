@@ -121,6 +121,22 @@
     font-size: 13px;
     padding: 5px 0;
   }
+  .deal-rank-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+  }
+  .deal-rank-title {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .deal-rank-grid .line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+  }
   .news-list {
     list-style: none;
     margin: 0;
@@ -191,21 +207,43 @@
   </div>
 
   <div class="card">
-    <h3>🏆 상승/하락 상위 종목</h3>
-    <div class="movers-row">
-      <div class="movers-col">
-        {% if risers %}
-        {% for r in risers %}
-        <div class="line"><span>{{ r.name }}</span><span class="up">🔺 {{ r.rate }}</span></div>
+    <h3>🌊 외국인·기관 순매매 상위 (코스피)</h3>
+    <div class="deal-rank-grid">
+      <div>
+        <div class="deal-rank-title up">외국인 순매수 TOP5</div>
+        {% if deal_rank.foreign_buy %}
+        {% for d in deal_rank.foreign_buy %}
+        <div class="line"><span>{{ d.name }}</span><span class="up">{{ d.amount }}</span></div>
         {% endfor %}
         {% else %}
         <div class="fallback">데이터 없음</div>
         {% endif %}
       </div>
-      <div class="movers-col">
-        {% if fallers %}
-        {% for f in fallers %}
-        <div class="line"><span>{{ f.name }}</span><span class="down">🔻 {{ f.rate }}</span></div>
+      <div>
+        <div class="deal-rank-title down">외국인 순매도 TOP5</div>
+        {% if deal_rank.foreign_sell %}
+        {% for d in deal_rank.foreign_sell %}
+        <div class="line"><span>{{ d.name }}</span><span class="down">{{ d.amount }}</span></div>
+        {% endfor %}
+        {% else %}
+        <div class="fallback">데이터 없음</div>
+        {% endif %}
+      </div>
+      <div>
+        <div class="deal-rank-title up">기관 순매수 TOP5</div>
+        {% if deal_rank.organ_buy %}
+        {% for d in deal_rank.organ_buy %}
+        <div class="line"><span>{{ d.name }}</span><span class="up">{{ d.amount }}</span></div>
+        {% endfor %}
+        {% else %}
+        <div class="fallback">데이터 없음</div>
+        {% endif %}
+      </div>
+      <div>
+        <div class="deal-rank-title down">기관 순매도 TOP5</div>
+        {% if deal_rank.organ_sell %}
+        {% for d in deal_rank.organ_sell %}
+        <div class="line"><span>{{ d.name }}</span><span class="down">{{ d.amount }}</span></div>
         {% endfor %}
         {% else %}
         <div class="fallback">데이터 없음</div>
