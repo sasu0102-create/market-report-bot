@@ -29,7 +29,6 @@ from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
-from bs4 import BeautifulSoup
 from jinja2 import Environment, FileSystemLoader
 from playwright.sync_api import sync_playwright
 
@@ -226,38 +225,66 @@ def get_watchlist():
 
 
 # ------------------------------------------------------------------
-# 2) 상승/하락 상위 종목
+# 2) 외국인/기관 순매수·순매도 상위 종목 (코스피, 당일 기준)
 # ------------------------------------------------------------------
-def get_top_movers(direction: str, count: int = MOVERS_COUNT):
-    """네이버 증권 순위 페이지에서 상승률/하락률 상위 종목을 가져옵니다. (코스피+코스닥 합산)"""
-    page = "sise_rise" if direction == "rise" else "sise_fall"
-    results = []
-    for sosok in (0, 1):  # 0: 코스피, 1: 코스닥
-        url = f"https://finance.naver.com/sise/{page}.naver?sosok={sosok}"
-        try:
-            resp = requests.get(url, headers=UA_HEADERS, timeout=15)
-            resp.raise_for_status()
-            resp.encoding = resp.apparent_encoding
-            soup = BeautifulSoup(resp.text, "html.parser")
-            table = soup.find("table", {"class": "type_2"})
-            if not table:
-                continue
-            for row in table.find_all("tr"):
-                name_tag = row.find("a", {"class": "tltle"})
-                if not name_tag:
+DEAL_RANK_URL = "https://m.stock.naver.com/api/domestic/market/trend/trendForeignOrg"
+
+
+def get_deal_rank(market: str, investor_type: str, count: int = MOVERS_COUNT):
+    """당일 기준 외국인/기관 순매수·순매도 상위 종목을 가져옵니다.
+    market: "KOSPI" 또는 "KOSDAQ" / investor_type: "FOREIGNER" 또는 "ORGANIZATION"
+    돌려주는 값: (매수 상위 리스트, 매도 상위 리스트)
+    ※ 정식 문서가 없는 API라 필드 이름이 다를 수 있어, 못 찾으면 로그에 원본 구조를 남깁니다."""
+    params = {"market": market, "investorType": investor_type, "periodType": "DAY"}
+    try:
+        resp = requests.get(DEAL_RANK_URL, params=params, headers=UA_HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        sections = data.get("sections", data) if isinstance(data, dict) else {}
+        buy_raw = sections.get("buyRankList") or data.get("buyRankList") or []
+        sell_raw = sections.get("sellRankList") or data.get("sellRankList") or []
+
+        if not buy_raw and not sell_raw:
+            print(
+                f"[경고] {market}/{investor_type} 순매매 데이터 구조를 못 찾음. 원본 키: "
+                f"{list(data.keys()) if isinstance(data, dict) else type(data)}",
+                file=sys.stderr,
+            )
+
+        def parse(raw_list):
+            items = []
+            for item in raw_list[:count]:
+                if not isinstance(item, dict):
                     continue
-                name = name_tag.get_text(strip=True)
-                rate_text = None
-                for td in row.find_all("td"):
-                    text = td.get_text(strip=True)
-                    if "%" in text:
-                        rate_text = text
-                        break
-                if name and rate_text:
-                    results.append({"name": name, "rate": rate_text})
-        except Exception as e:
-            print(f"[경고] {url} 가져오기 실패: {e}", file=sys.stderr)
-    return results[:count]
+                name = _find_value(item, ["name"]) or "-"
+                amount = _find_value(item, ["amount"])
+                items.append({"name": str(name), "amount": _format_deal_amount(amount)})
+            return items
+
+        return parse(buy_raw), parse(sell_raw)
+    except Exception as e:
+        print(f"[경고] {market}/{investor_type} 순매매 상위 가져오기 실패: {e}", file=sys.stderr)
+        return [], []
+
+
+def _format_deal_amount(value):
+    try:
+        num = float(value)
+        return f"{num:,.0f}"
+    except (TypeError, ValueError):
+        return str(value) if value is not None else "-"
+
+
+def build_deal_rank_sections():
+    foreign_buy, foreign_sell = get_deal_rank("KOSPI", "FOREIGNER")
+    organ_buy, organ_sell = get_deal_rank("KOSPI", "ORGANIZATION")
+    return {
+        "foreign_buy": foreign_buy,
+        "foreign_sell": foreign_sell,
+        "organ_buy": organ_buy,
+        "organ_sell": organ_sell,
+    }
 
 
 # ------------------------------------------------------------------
@@ -294,8 +321,7 @@ def build_data() -> dict:
         "today": now.strftime("%Y년 %m월 %d일 (%a) %H:%M"),
         "markets": build_market_boxes(),
         "watch": get_watchlist(),
-        "risers": get_top_movers("rise"),
-        "fallers": get_top_movers("fall"),
+        "deal_rank": build_deal_rank_sections(),
         "news": get_news(),
     }
 
