@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    width: 780px;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    background: #0f1424;
+    color: #ffffff;
+  }
+  .header {
+    background: linear-gradient(90deg, #1b2a6b, #274690);
+    border-radius: 16px;
+    padding: 16px 24px;
+    text-align: center;
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 18px;
+  }
+  .market-row {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .market-card {
+    flex: 1;
+    background: #1a2140;
+    border-radius: 14px;
+    padding: 16px 18px;
+  }
+  .market-card .name {
+    font-size: 14px;
+    color: #9fb3ff;
+    margin-bottom: 4px;
+  }
+  .market-card .price {
+    font-size: 24px;
+    font-weight: 800;
+  }
+  .market-card .pct {
+    font-size: 15px;
+    font-weight: 700;
+    margin-left: 8px;
+  }
+  .up { color: #ff5b5b; }
+  .down { color: #4f8cff; }
+  .flat { color: #aaaaaa; }
+  .flow-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #2c3766;
+  }
+  .flow-item {
+    text-align: center;
+    flex: 1;
+  }
+  .flow-item .label {
+    font-size: 12px;
+    color: #8892bd;
+    margin-bottom: 4px;
+  }
+  .flow-item .value {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .watch-card {
+    background: #1a2140;
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  .watch-card h3 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: #9fb3ff;
+    border-bottom: 1px solid #2c3766;
+    padding-bottom: 8px;
+  }
+  .watch-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px 14px;
+  }
+  .watch-grid .line {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .card {
+    background: #1a2140;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .card h3 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: #9fb3ff;
+    border-bottom: 1px solid #2c3766;
+    padding-bottom: 8px;
+  }
+  .movers-row {
+    display: flex;
+    gap: 14px;
+  }
+  .movers-col {
+    flex: 1;
+  }
+  .movers-col .line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 5px 0;
+  }
+  .news-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .news-list li {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 7px 0;
+    border-bottom: 1px solid #2c3766;
+  }
+  .news-list li:last-child { border-bottom: none; }
+  .news-list li::before {
+    content: "· ";
+    color: #9fb3ff;
+  }
+  .fallback {
+    font-size: 12px;
+    color: #8892bd;
+    padding: 10px 0;
+    text-align: center;
+  }
+  .footer {
+    text-align: center;
+    font-size: 11px;
+    color: #5a6389;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+  <div class="header">📊 한국증시 오후장 리포트<br><span style="font-size:14px; font-weight:400;">{{ today }}</span></div>
+
+  <div class="market-row">
+    {% for m in markets %}
+    <div class="market-card">
+      <div class="name">{{ m.name }}</div>
+      {% if m.valid %}
+      <span class="price">{{ m.price_fmt }}</span><span class="pct {{ 'up' if m.up else ('down' if m.down else 'flat') }}">{{ '🔺' if m.up else ('🔻' if m.down else '➖') }} {{ m.pct_fmt }}</span>
+      {% else %}
+      <span class="fallback">데이터 없음</span>
+      {% endif %}
+
+      {% if m.flow %}
+      <div class="flow-row">
+        {% for f in m.flow %}
+        <div class="flow-item">
+          <div class="label">{{ f.label }}</div>
+          <div class="value {{ 'up' if f.up else ('down' if f.down else 'flat') }}">{{ f.value_fmt }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="watch-card">
+    <h3>👀 관심 종목</h3>
+    <div class="watch-grid">
+      {% for w in watch %}
+      <div class="line">
+        <span>{{ w.name }}</span>
+        <span class="{{ 'up' if w.up else ('down' if w.down else 'flat') }}">{{ '🔺' if w.up else ('🔻' if w.down else '➖') }} {{ w.pct_fmt }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>🏆 상승/하락 상위 종목</h3>
+    <div class="movers-row">
+      <div class="movers-col">
+        {% if risers %}
+        {% for r in risers %}
+        <div class="line"><span>{{ r.name }}</span><span class="up">🔺 {{ r.rate }}</span></div>
+        {% endfor %}
+        {% else %}
+        <div class="fallback">데이터 없음</div>
+        {% endif %}
+      </div>
+      <div class="movers-col">
+        {% if fallers %}
+        {% for f in fallers %}
+        <div class="line"><span>{{ f.name }}</span><span class="down">🔻 {{ f.rate }}</span></div>
+        {% endfor %}
+        {% else %}
+        <div class="fallback">데이터 없음</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>📰 관련 뉴스</h3>
+    {% if news %}
+    <ul class="news-list">
+      {% for n in news %}
+      <li>{{ n }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="fallback">뉴스를 불러오지 못했습니다</div>
+    {% endif %}
+  </div>
+
+  <div class="footer">자동 생성 · 수급 출처: 네이버증권 · 뉴스 출처: Google 뉴스 · 투자 판단의 참고용입니다</div>
+</body>
+</html>
